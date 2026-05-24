@@ -7,6 +7,7 @@ import { aiOptimize, PROVIDER_PRESETS } from './ai-optimizer.js';
 import { QUICK_TEMPLATES } from './templates.js';
 import { diagnose } from './diagnoser.js';
 import { evaluatePair } from './evaluator.js';
+import { getClarificationQuestions } from './clarifier.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -61,11 +62,22 @@ const els = {
   deltaMeta:     $('#delta-meta'),
   evalDimensions:$('#eval-dimensions'),
   origComment:   $('#orig-comment'),
-  optComment:    $('#opt-comment')
+  optComment:    $('#opt-comment'),
+
+  // Clarification
+  cfgClarifyEnabled: $('#cfg-clarify-enabled'),
+  modalClarify:     $('#modal-clarify'),
+  clarifyCount:     $('#clarify-count'),
+  clarifyQuestions: $('#clarify-questions'),
+  clarifySkipFuture:$('#clarify-skip-future'),
+  btnClarifySkip:   $('#btn-clarify-skip'),
+  btnClarifyContinue:$('#btn-clarify-continue')
 };
 
 // === 状态 ===
 let lastOutput = '';
+let sessionSkipClarify = false;     // 用户在本次会话点了"不再追问"
+let pendingClarifyResolve = null;   // 当前 clarify 流程的回调
 
 // === 初始化 ===
 init();
@@ -81,6 +93,7 @@ function init() {
   els.cfgKey.value   = cfg.apiKey || '';
   els.cfgModel.value = cfg.model || '';
   els.cfgTemp.value  = (cfg.temperature ?? 0.3).toString();
+  els.cfgClarifyEnabled.checked = cfg.clarifyEnabled !== false; // 默认 true
 
   // 模板
   renderTemplates();
@@ -158,7 +171,8 @@ function bindEvents() {
       baseUrl: els.cfgBase.value.trim(),
       apiKey: els.cfgKey.value.trim(),
       model: els.cfgModel.value.trim(),
-      temperature: parseFloat(els.cfgTemp.value) || 0.3
+      temperature: parseFloat(els.cfgTemp.value) || 0.3,
+      clarifyEnabled: els.cfgClarifyEnabled.checked
     });
     toast('✅ 设置已保存（仅本地）');
     closeAllModals();
@@ -201,10 +215,13 @@ function onLocalOptimize() {
     els.input.focus();
     return;
   }
-  const result = optimize(opts);
-  renderOutput(result.output);
-  renderDiagnostics(result.diag);
-  renderChanges(result.changes);
+
+  runWithClarification(opts, ({ userAnswers, questions }) => {
+    const result = optimize({ ...opts, userAnswers, questions });
+    renderOutput(result.output);
+    renderDiagnostics(result.diag);
+    renderChanges(result.changes);
+  });
 }
 
 async function onAiOptimize() {
@@ -221,58 +238,66 @@ async function onAiOptimize() {
     return;
   }
 
-  const btn = els.btnAiOptimize;
-  btn.disabled = true;
-  btn.classList.add('loading');
-  const originalLabel = btn.textContent;
-  btn.textContent = '🤖 AI 优化中';
+  runWithClarification(opts, async ({ userAnswers, questions }) => {
+    const btn = els.btnAiOptimize;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    const originalLabel = btn.textContent;
+    btn.textContent = '🤖 AI 优化中';
 
-  // 立刻显示一份"本地版"作为兜底，并给出诊断
-  const local = optimize(opts);
-  renderDiagnostics(local.diag);
-  renderChanges(['🤖 调用 AI 深度优化中，结果将以流式方式增量呈现...']);
-  els.output.textContent = '';
-  lastOutput = '';
+    // 立刻显示一份"本地版"作为兜底，并给出诊断
+    const local = optimize({ ...opts, userAnswers, questions });
+    renderDiagnostics(local.diag);
+    renderChanges(['🤖 调用 AI 深度优化中，结果将以流式方式增量呈现...']);
+    els.output.textContent = '';
+    lastOutput = '';
 
-  try {
-    const result = await aiOptimize({
-      rawPrompt: opts.prompt,
-      config: cfg,
-      scenario: opts.scenario,
-      modelStyle: opts.modelStyle,
-      language: opts.language,
-      options: {
-        fewshot: opts.fewshot,
-        cot: opts.cot,
-        selfcheck: opts.selfcheck,
-        security: opts.security
-      },
-      onChunk: (chunk) => {
-        lastOutput += chunk;
-        els.output.textContent = lastOutput;
-        els.output.scrollTop = els.output.scrollHeight;
+    try {
+      const result = await aiOptimize({
+        rawPrompt: opts.prompt,
+        config: cfg,
+        scenario: opts.scenario,
+        modelStyle: opts.modelStyle,
+        language: opts.language,
+        options: {
+          fewshot: opts.fewshot,
+          cot: opts.cot,
+          selfcheck: opts.selfcheck,
+          security: opts.security
+        },
+        userAnswers,
+        questions,
+        onChunk: (chunk) => {
+          lastOutput += chunk;
+          els.output.textContent = lastOutput;
+          els.output.scrollTop = els.output.scrollHeight;
+        }
+      });
+      lastOutput = result || lastOutput;
+      els.output.textContent = lastOutput;
+      const baseChanges = [
+        '🤖 已由 AI 深度优化',
+        `模型：${cfg.model}`,
+        '本地诊断仍按原始提示词分析（见左上角分数）',
+        '若 AI 输出不符合预期，可尝试切换"目标模型风格"或重新调整选项'
+      ];
+      const answeredCount = Object.values(userAnswers || {}).filter(v => v && String(v).trim()).length;
+      if (answeredCount > 0) {
+        baseChanges.unshift(`🗣️ 已融入你在对话中补充的 ${answeredCount} 项关键信息`);
       }
-    });
-    lastOutput = result || lastOutput;
-    els.output.textContent = lastOutput;
-    renderChanges([
-      '🤖 已由 AI 深度优化',
-      `模型：${cfg.model}`,
-      '本地诊断仍按原始提示词分析（见左上角分数）',
-      '若 AI 输出不符合预期，可尝试切换"目标模型风格"或重新调整选项'
-    ]);
-    toast('✅ AI 深度优化完成');
-  } catch (e) {
-    console.error(e);
-    renderChanges(['❌ AI 优化失败：' + e.message, '↪︎ 已为你保留本地优化版本作为兜底']);
-    // 失败时回退到本地优化
-    renderOutput(local.output);
-    toast('AI 优化失败：' + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.classList.remove('loading');
-    btn.textContent = originalLabel;
-  }
+      renderChanges(baseChanges);
+      toast('✅ AI 深度优化完成');
+    } catch (e) {
+      console.error(e);
+      renderChanges(['❌ AI 优化失败：' + e.message, '↪︎ 已为你保留本地优化版本作为兜底']);
+      renderOutput(local.output);
+      toast('AI 优化失败：' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.textContent = originalLabel;
+    }
+  });
 }
 
 function onLiveDiagnose() {
@@ -536,4 +561,176 @@ function renderDimensionsHTML(origDims, optDims) {
       </div>
     `;
   }).join('');
+}
+
+
+
+// ============================================================
+// === 对话引导补全 (Clarification Flow) ======================
+// ============================================================
+
+/**
+ * 在执行优化前，先检查是否需要追问关键信息。
+ * 如果需要，弹出 modal 收集用户答案；否则直接走原流程。
+ *
+ * @param {Object} opts             getOptions() 的结果
+ * @param {Function} executor       接收 { userAnswers, questions } 后真正执行优化的函数
+ */
+function runWithClarification(opts, executor) {
+  const cfg = loadConfig();
+  const enabledGlobally = cfg.clarifyEnabled !== false;
+
+  // 全局禁用 / 本次会话已跳过 → 直接执行
+  if (!enabledGlobally || sessionSkipClarify) {
+    executor({ userAnswers: {}, questions: [] });
+    return;
+  }
+
+  const questions = getClarificationQuestions({
+    prompt: opts.prompt,
+    scenario: opts.scenario
+  });
+
+  if (questions.length === 0) {
+    // 不需要问 → 直接执行
+    executor({ userAnswers: {}, questions: [] });
+    return;
+  }
+
+  // 弹出对话引导窗口
+  openClarifyModal(questions, (answers) => {
+    executor({ userAnswers: answers, questions });
+  });
+}
+
+/**
+ * 渲染并展示追问 modal
+ */
+function openClarifyModal(questions, onProceed) {
+  els.clarifyCount.textContent = questions.length;
+  els.clarifySkipFuture.checked = false;
+  els.clarifyQuestions.innerHTML = questions.map(renderClarifyQuestion).join('');
+
+  const continueBtn = els.btnClarifyContinue;
+  const skipBtn     = els.btnClarifySkip;
+
+  // 实时监听输入，启用/禁用"继续优化"按钮
+  const refreshContinue = () => {
+    const allRequiredFilled = questions
+      .filter(q => q.required)
+      .every(q => {
+        const v = readQuestionValue(q.key);
+        return v && String(v).trim();
+      });
+    continueBtn.disabled = !allRequiredFilled;
+    continueBtn.textContent = allRequiredFilled
+      ? '继续优化 →'
+      : '请先填写必填项';
+  };
+
+  // 绑定输入监听
+  els.clarifyQuestions.querySelectorAll('input, textarea, select').forEach(el => {
+    el.addEventListener('input', refreshContinue);
+    el.addEventListener('change', refreshContinue);
+  });
+  refreshContinue();
+
+  // 继续优化
+  continueBtn.onclick = () => {
+    const answers = {};
+    let firstMissing = null;
+    for (const q of questions) {
+      const v = readQuestionValue(q.key);
+      if (q.required && (!v || !String(v).trim())) {
+        firstMissing = q;
+        markQuestionMissing(q.key);
+      } else if (v && String(v).trim()) {
+        answers[q.key] = String(v).trim();
+      }
+    }
+    if (firstMissing) {
+      toast('请填写必填项：' + firstMissing.label);
+      return;
+    }
+
+    if (els.clarifySkipFuture.checked) sessionSkipClarify = true;
+    closeAllModals();
+    onProceed(answers);
+  };
+
+  // 跳过本次（不填用户答案，使用占位符）
+  skipBtn.onclick = () => {
+    if (els.clarifySkipFuture.checked) sessionSkipClarify = true;
+    closeAllModals();
+    onProceed({});
+  };
+
+  // 取消按钮（X）已通过 data-close 处理，但要清空回调
+  pendingClarifyResolve = null;
+  openModal(els.modalClarify);
+
+  // focus 第一个问题
+  const firstInput = els.clarifyQuestions.querySelector('input, textarea, select');
+  if (firstInput) setTimeout(() => firstInput.focus(), 60);
+}
+
+/**
+ * 渲染单个问题
+ */
+function renderClarifyQuestion(q) {
+  const cls = q.required ? 'clarify-q required' : 'clarify-q';
+  const tag = q.required
+    ? '<span class="clarify-q-tag required">必填</span>'
+    : '<span class="clarify-q-tag optional">可选</span>';
+  const icon = q.required ? '⭐' : '·';
+
+  const ph = escape(q.placeholder || '');
+  const labelEsc = escape(q.label);
+  const hintEsc = escape(q.hint || '');
+
+  let inputHtml = '';
+  if (q.type === 'textarea') {
+    inputHtml = `<textarea data-q-key="${q.key}" placeholder="${ph}"></textarea>`;
+  } else if (q.type === 'datalist') {
+    const datalistId = `dl-${q.key}`;
+    const opts = (q.options || []).map(o => `<option value="${escape(o)}">`).join('');
+    inputHtml =
+      `<input type="text" data-q-key="${q.key}" list="${datalistId}" placeholder="${ph}" />
+       <datalist id="${datalistId}">${opts}</datalist>`;
+  } else if (q.type === 'select') {
+    const opts = (q.options || []).map(o => {
+      const val = typeof o === 'string' ? o : o.value;
+      const lbl = typeof o === 'string' ? o : o.label;
+      return `<option value="${escape(val)}">${escape(lbl)}</option>`;
+    }).join('');
+    inputHtml = `<select data-q-key="${q.key}"><option value="">请选择...</option>${opts}</select>`;
+  } else {
+    inputHtml = `<input type="text" data-q-key="${q.key}" placeholder="${ph}" />`;
+  }
+
+  return `
+    <div class="${cls}" data-q-block="${q.key}">
+      <div class="clarify-q-head">
+        <span class="clarify-q-icon">${icon}</span>
+        <span class="clarify-q-label">${labelEsc}</span>
+        ${tag}
+      </div>
+      ${q.hint ? `<p class="clarify-q-hint">${hintEsc}</p>` : ''}
+      ${inputHtml}
+    </div>
+  `;
+}
+
+function readQuestionValue(key) {
+  const el = els.clarifyQuestions.querySelector(`[data-q-key="${CSS.escape(key)}"]`);
+  return el ? el.value : '';
+}
+
+function markQuestionMissing(key) {
+  const block = els.clarifyQuestions.querySelector(`[data-q-block="${CSS.escape(key)}"]`);
+  if (!block) return;
+  block.classList.add('missing');
+  setTimeout(() => block.classList.remove('missing'), 600);
+  const input = block.querySelector('input, textarea, select');
+  if (input) input.focus();
 }

@@ -410,7 +410,7 @@ textarea:focus, input:focus, select:focus {
 }
 @media (max-width: 720px) {
   .eval-overall { grid-template-columns: 1fr; }
-  .card-arrow { display: none; }
+  /* card-arrow rotation handled in mobile section below */
 }
 .overall-card {
   background: var(--bg-soft);
@@ -577,3 +577,288 @@ textarea:focus, input:focus, select:focus {
 .delta-positive { color: var(--accent) !important; }
 .delta-negative { color: var(--danger) !important; }
 .delta-zero     { color: var(--text-soft) !important; }
+
+
+
+/* ============================================================ */
+/* === Clarification Modal (对话引导追问) ===================== */
+/* ============================================================ */
+
+#modal-clarify .modal-body { padding: 18px 22px; }
+
+.clarify-q {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.clarify-q:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99,102,241,.12);
+}
+.clarify-q.required {
+  border-left: 3px solid var(--accent);
+}
+
+.clarify-q-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.clarify-q-icon { font-size: 14px; }
+.clarify-q-label { font-weight: 600; font-size: 14px; flex: 1; }
+.clarify-q-tag {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: .3px;
+}
+.clarify-q-tag.required { background: var(--accent); color: #fff; }
+.clarify-q-tag.optional { background: var(--bg-elev); color: var(--text-soft); border: 1px solid var(--border); }
+
+.clarify-q-hint {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.clarify-q input[type="text"],
+.clarify-q textarea,
+.clarify-q select {
+  background: var(--bg-elev);
+}
+.clarify-q textarea {
+  min-height: 80px;
+  max-height: 220px;
+}
+
+.clarify-error {
+  text-align: center;
+  padding: 30px 20px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+#modal-clarify footer { gap: 8px; flex-wrap: wrap; }
+#modal-clarify footer label.toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+
+/* missing-required visual flash */
+.clarify-q.missing { animation: shake .35s ease-out; border-color: var(--danger); }
+@keyframes shake {
+  0%,100% { transform: translateX(0); }
+  20%,60% { transform: translateX(-4px); }
+  40%,80% { transform: translateX(4px); }
+}
+
+
+
+/* ============================================================ */
+/* === Mobile-friendly enhancements ===========================  */
+/* ============================================================ */
+
+/* 全局：去掉 iOS 蓝色点击高亮，启用流畅滚动 */
+html { -webkit-tap-highlight-color: transparent; }
+body { -webkit-overflow-scrolling: touch; }
+
+/* 安全区适配（刘海屏 / 底部 home indicator） */
+@supports (padding: max(0px)) {
+  .topbar {
+    padding-left: max(28px, env(safe-area-inset-left));
+    padding-right: max(28px, env(safe-area-inset-right));
+    padding-top: max(16px, env(safe-area-inset-top));
+  }
+  .layout {
+    padding-left: max(28px, env(safe-area-inset-left));
+    padding-right: max(28px, env(safe-area-inset-right));
+  }
+  .footer {
+    padding-bottom: max(30px, env(safe-area-inset-bottom));
+  }
+}
+
+/* === ≤ 768px：手机/小平板 === */
+@media (max-width: 768px) {
+  /* 防止 iOS Safari 在输入框聚焦时自动放大 */
+  textarea, input[type="text"], input[type="password"], input[type="number"], select {
+    font-size: 16px;
+  }
+
+  /* 整体容器更紧凑 */
+  .layout {
+    padding: 12px 14px;
+    gap: 12px;
+  }
+  @supports (padding: max(0px)) {
+    .layout {
+      padding-left: max(14px, env(safe-area-inset-left));
+      padding-right: max(14px, env(safe-area-inset-right));
+    }
+  }
+
+  /* 顶栏：缩小副标题 / 紧凑按钮 */
+  .topbar {
+    padding: 12px 14px;
+  }
+  .brand { gap: 10px; }
+  .brand h1 { font-size: 16px; }
+  .brand .logo { font-size: 24px; }
+  .subtitle { display: none; } /* 副标题在手机上太挤 */
+  .topbar-actions { gap: 6px; }
+  .topbar-actions .btn { padding: 8px 10px; font-size: 13px; }
+  .topbar-actions .btn-icon { margin-right: 2px; }
+
+  /* 面板：减少最小高度，避免大段空白 */
+  .panel {
+    padding: 16px;
+    min-height: auto;
+    gap: 12px;
+  }
+  .panel-header h2 { font-size: 15px; }
+  .panel-actions { gap: 4px; }
+
+  /* textarea 在小屏更轻量 */
+  textarea {
+    min-height: 160px;
+  }
+
+  /* 控件单列堆叠 */
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  /* 触摸目标 ≥ 38px 高 */
+  .btn { min-height: 38px; }
+  .btn-mini { min-height: 32px; padding: 7px 12px; font-size: 12.5px; }
+  .btn-primary, .btn-accent { min-height: 46px; padding: 12px; font-size: 15px; }
+  .btn-close { min-height: 36px; min-width: 36px; }
+  .chip { min-height: 30px; padding: 6px 12px; }
+  .toggle { padding: 6px 0; }     /* 增加 checkbox 命中区 */
+
+  /* 输出代码块：可水平滚动，避免撑爆视口 */
+  .output {
+    font-size: 12.5px;
+    max-height: 360px;
+  }
+
+  /* === Modal：底部抽屉式（更符合移动端习惯） === */
+  .modal {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal-card,
+  .modal-card.modal-wide {
+    max-width: 100%;
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 16px 16px 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    animation: slideUpModal .25s cubic-bezier(.16,.84,.32,1.04);
+  }
+  .modal-card header {
+    padding: 14px 16px;
+    position: relative;
+  }
+  .modal-card header::before {
+    content: "";
+    position: absolute;
+    top: 6px; left: 50%;
+    transform: translateX(-50%);
+    width: 36px; height: 4px;
+    border-radius: 4px;
+    background: var(--border);
+  }
+  .modal-card header h2 { font-size: 15px; }
+  .modal-body { padding: 14px 16px; }
+  .modal-card footer {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .modal-card footer .btn { flex: 1 1 auto; min-width: 0; }
+  @keyframes slideUpModal {
+    from { transform: translateY(40px); opacity: 0.6; }
+    to   { transform: translateY(0);    opacity: 1; }
+  }
+
+  /* === 评分对比：竖向堆叠，箭头转 90° === */
+  .eval-overall {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .card-arrow {
+    display: flex !important;
+    transform: rotate(90deg);
+    margin: -4px 0;
+    align-self: center;
+  }
+  .overall-card { padding: 12px 14px; }
+  .card-score { font-size: 28px; }
+
+  /* 维度行：理由换行到第二行 */
+  .dim-row {
+    grid-template-columns: 56px 1fr 28px;
+    gap: 8px;
+  }
+  .dim-reason {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    margin-left: 64px;
+    white-space: normal;
+    color: var(--text-soft);
+    font-size: 11px;
+    font-style: italic;
+    line-height: 1.5;
+  }
+
+  /* AI 评语：标签行换行 */
+  .comment-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .comment-tag { width: fit-content; }
+
+  /* 模板网格：单列 */
+  .template-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* 提示词追问：textarea 别太高 */
+  .clarify-q textarea { min-height: 64px; }
+
+  /* 评分面板提示：缩小行间距 */
+  .hint, .hint-inline { padding: 10px 12px; }
+
+  /* footer */
+  .footer {
+    padding: 20px 14px 30px;
+    font-size: 11px;
+  }
+  .footer p { line-height: 1.6; }
+}
+
+/* === ≤ 380px：超小屏（如 iPhone SE 一代） === */
+@media (max-width: 380px) {
+  .topbar-actions .btn-label {
+    display: none;   /* 只保留 emoji，省空间 */
+  }
+  .topbar-actions .btn { padding: 8px 9px; }
+  .brand h1 { font-size: 15px; }
+  .panel-header h2 { font-size: 14px; }
+  .controls { gap: 8px; }
+  .layout { padding: 10px 12px; }
+}
+
+/* === 横屏手机：让 textarea 不要把按钮顶出屏外 === */
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
+  textarea { min-height: 120px; }
+  .panel { padding: 14px; min-height: auto; }
+  .modal-card { max-height: 96vh; }
+}

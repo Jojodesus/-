@@ -2,10 +2,15 @@
 // optimizer.js
 // 规则引擎：把原始提示词重写为结构化、可验收的高质量 Prompt
 // 参考：Datawhale Easy-Vibe / OpenAI Best Practices / Anthropic Prompt Engineering
+//
+// 关键变化（v2）：
+//   接受 userAnswers + questions（来自 clarifier），把"用户通过对话补充"
+//   的真实信息融入 Prompt（替代占位符），而不是自行随意猜测填充。
 // =============================================================
 
 import { SCENARIOS } from './templates.js';
 import { diagnose } from './diagnoser.js';
+import { distributeAnswers } from './clarifier.js';
 
 /**
  * 检测文本主语言
@@ -31,7 +36,6 @@ function extractTaskHint(prompt) {
       if (prompt.includes(v)) return group[0];
     }
   }
-  // 英文
   const enMatch = prompt.match(/\b(write|generate|summari[sz]e|translate|analy[sz]e|explain|extract|rewrite|improve|optimi[sz]e|compare|evaluate|recommend|design|plan)\b/i);
   return enMatch ? enMatch[1].toLowerCase() : null;
 }
@@ -47,7 +51,9 @@ function extractTaskHint(prompt) {
  * @param {boolean} params.cot
  * @param {boolean} params.selfcheck
  * @param {boolean} params.security
- * @returns {{ output:string, diag:object, changes:string[] }}
+ * @param {Object}  [params.userAnswers]  - 来自对话引导的答案 { qkey: 'value' }
+ * @param {Array}   [params.questions]    - 本次实际问的问题（用于解释 applyTo）
+ * @returns {{ output:string, diag:object, changes:string[], answeredKeys:string[] }}
  */
 export function optimize(params) {
   const {
@@ -58,7 +64,9 @@ export function optimize(params) {
     fewshot = false,
     cot = true,
     selfcheck = true,
-    security = false
+    security = false,
+    userAnswers = {},
+    questions = []
   } = params;
 
   const raw = prompt.trim();
@@ -66,16 +74,21 @@ export function optimize(params) {
   const lang = language === 'auto' ? detectLang(raw) : language;
   const sc = SCENARIOS[scenario] || SCENARIOS.general;
   const taskHint = extractTaskHint(raw);
-
   const T = lang === 'en' ? EN : ZH;
   const changes = [];
+
+  // 把用户的对话回答按目标 section 分组
+  const buckets = distributeAnswers(userAnswers, questions);
+  const hasUserAnswers =
+    buckets.task.length + buckets.context.length + buckets.constraint.length +
+    buckets.audience.length + buckets.format.length > 0;
 
   // 没有原始内容时给一个最小占位骨架
   const userIntent = raw || (lang === 'zh'
     ? '[请把你的需求写在这里。例如：帮我写一个产品的卖点文案]'
     : '[Describe your task here, e.g., write 3 selling points for a product]');
 
-  // 缺什么补什么
+  // 缺什么补什么（基于 diagnose）
   const need = (key) => !diag.items.find(i => i.key === key)?.present;
 
   // ===== 构建各 section =====
@@ -86,41 +99,64 @@ export function optimize(params) {
     sections.push({ key: 'role', title: T.role, body: sc.role[lang] });
     changes.push(T.changeRole);
   } else {
-    // 用户已写了角色，保留原文这一段不强加，但仍构造 section（从原文中尽量提取首句作为角色）
     const roleLine = raw.split(/[。.\n]/).find(l => /你是|act as|you are/i.test(l));
     sections.push({ key: 'role', title: T.role, body: (roleLine || sc.role[lang]).trim() });
   }
 
-  // 2. 任务
-  const taskBody = buildTaskBody(userIntent, taskHint, lang);
+  // 2. 任务（若用户通过对话补充了 task 类信息，融入）
+  const taskBody = buildTaskBody(userIntent, taskHint, lang, buckets.task);
   sections.push({ key: 'task', title: T.task, body: taskBody });
   if (need('task')) changes.push(T.changeTask);
-
-  // 3. 上下文/输入材料（如果原文短，就给占位；如果原文很长，尝试把"内容部分"放进来）
-  const contextBlock = buildContextBlock(raw, lang);
-  sections.push({ key: 'context', title: T.context, body: contextBlock });
-  if (need('context')) changes.push(T.changeContext);
-
-  // 4. 受众（可选）
-  if (need('audience') && scenario !== 'agent' && scenario !== 'code') {
-    sections.push({ key: 'audience', title: T.audience, body: T.audienceBody });
-    changes.push(T.changeAudience);
+  if (buckets.task.length > 0) {
+    changes.push(formatUserChange(T.changeUserTask, buckets.task));
   }
 
-  // 5. 约束
+  // 3. 上下文 / 输入材料
+  // 优先级：用户对话回答 > 原文里的材料块 > 占位符
+  const contextResult = buildContextBlock(raw, lang, buckets.context);
+  sections.push({ key: 'context', title: T.context, body: contextResult.body });
+  if (buckets.context.length > 0) {
+    changes.push(formatUserChange(T.changeUserContext, buckets.context));
+  } else if (need('context')) {
+    changes.push(T.changeContext);
+  }
+
+  // 4. 受众（用户回答优先于占位符）
+  const audienceUserProvided = buckets.audience.length > 0;
+  const showAudience = audienceUserProvided || (need('audience') && scenario !== 'agent' && scenario !== 'code');
+  if (showAudience) {
+    let body;
+    if (audienceUserProvided) {
+      body = buckets.audience.map(a => `- ${a.label}：${a.value}`).join('\n');
+      changes.push(formatUserChange(T.changeUserAudience, buckets.audience));
+    } else {
+      body = T.audienceBody;
+      changes.push(T.changeAudience);
+    }
+    sections.push({ key: 'audience', title: T.audience, body });
+  }
+
+  // 5. 约束（用户回答会追加到默认约束之后）
   const constraintsList = [...sc.constraints[lang]];
+  buckets.constraint.forEach(a => constraintsList.push(`${a.label}：${a.value}`));
   if (need('constraint')) changes.push(T.changeConstraint);
+  if (buckets.constraint.length > 0) {
+    changes.push(formatUserChange(T.changeUserConstraint, buckets.constraint));
+  }
   sections.push({ key: 'constraint', title: T.constraint, body: bulletize(constraintsList) });
 
   // 6. 输出格式
-  if (need('format')) {
-    sections.push({ key: 'format', title: T.format, body: sc.format[lang] });
+  let formatBody = sc.format[lang];
+  if (buckets.format.length > 0) {
+    // 用户指定了格式
+    formatBody = buckets.format.map(a => a.value).join('\n');
+    changes.push(formatUserChange(T.changeUserFormat, buckets.format));
+  } else if (need('format')) {
     changes.push(T.changeFormat);
-  } else {
-    sections.push({ key: 'format', title: T.format, body: sc.format[lang] });
   }
+  sections.push({ key: 'format', title: T.format, body: formatBody });
 
-  // 7. Few-shot 示例
+  // 7. Few-shot 示例（仍是可选占位，保持原行为）
   if (fewshot) {
     sections.push({ key: 'example', title: T.example, body: T.exampleBody });
     changes.push(T.changeFewshot);
@@ -146,6 +182,11 @@ export function optimize(params) {
     changes.push(T.changeSecurity);
   }
 
+  // 头部加一条总览：是否有用户对话补充
+  if (hasUserAnswers) {
+    changes.unshift(T.changeUserSummary);
+  }
+
   // ===== 渲染 =====
   let output;
   if (modelStyle === 'claude') {
@@ -153,45 +194,71 @@ export function optimize(params) {
   } else if (modelStyle === 'openai') {
     output = renderOpenAI(sections, T);
   } else if (modelStyle === 'thinking') {
-    output = renderThinking(sections, userIntent, taskBody, contextBlock, T);
+    output = renderThinking(sections, T);
   } else {
     output = renderMarkdown(sections, T);
   }
 
-  return { output, diag, changes };
+  return {
+    output,
+    diag,
+    changes,
+    answeredKeys: Object.keys(userAnswers || {}).filter(k => {
+      const v = userAnswers[k];
+      return v != null && (typeof v !== 'string' || v.trim());
+    })
+  };
 }
 
 // ====== 构建辅助函数 ======
 
-function buildTaskBody(userIntent, taskHint, lang) {
+function buildTaskBody(userIntent, taskHint, lang, taskBucket = []) {
   const T = lang === 'en' ? EN : ZH;
-  // 把用户的"随口一句"包装成可执行的任务陈述
-  if (!taskHint) return userIntent;
-  return userIntent;
+  let body = userIntent;
+  if (taskBucket.length > 0) {
+    const lines = taskBucket.map(a => `- **${a.label}**：${a.value}`);
+    body += `\n\n${T.userConfirmedHeader}\n${lines.join('\n')}`;
+  }
+  return body;
 }
 
-function buildContextBlock(raw, lang) {
+/**
+ * 构建上下文块。优先使用用户回答的真实内容。
+ * @returns {{body:string, source:'user'|'placeholder'}}
+ */
+function buildContextBlock(raw, lang, contextBucket = []) {
   const T = lang === 'en' ? EN : ZH;
-  // 短输入：留占位让用户填材料；长输入：保留原文本作为材料
+
+  if (contextBucket.length > 0) {
+    // 用用户提供的真实材料
+    const blocks = contextBucket.map(a => {
+      // 多个材料用 ### 子标题
+      return `### ${a.label}\n\n\`\`\`\n${a.value}\n\`\`\``;
+    });
+    return { body: blocks.join('\n\n'), source: 'user' };
+  }
+
+  // 没有用户回答 → 维持原占位逻辑
   if (raw.length < 80) {
-    return T.contextPlaceholder;
+    return { body: T.contextPlaceholder, source: 'placeholder' };
   }
-  // 检测原文里是否已经有用 ``` 或 """ 包裹的素材
   if (/```[\s\S]+```|"""[\s\S]+"""/.test(raw)) {
-    return T.contextKeepOriginal;
+    return { body: T.contextKeepOriginal, source: 'placeholder' };
   }
-  return T.contextPlaceholder;
+  return { body: T.contextPlaceholder, source: 'placeholder' };
 }
 
 function bulletize(arr) {
   return arr.map(s => `- ${s}`).join('\n');
 }
 
+function formatUserChange(template, bucket) {
+  const labels = bucket.map(a => a.label).join('、');
+  return template.replace('{labels}', labels);
+}
+
 // ====== 三种渲染风格 ======
 
-/**
- * Markdown 风（通用，最通用、最易读）
- */
 function renderMarkdown(sections, T) {
   const parts = [];
   for (const s of sections) {
@@ -202,10 +269,6 @@ function renderMarkdown(sections, T) {
   return parts.join('\n').trim();
 }
 
-/**
- * Claude / Anthropic 推荐的 XML 风
- * 教程参考：Anthropic 官方文档强调使用 XML 标签来结构化输入
- */
 function renderXML(sections, T) {
   const parts = [];
   const tagMap = {
@@ -220,9 +283,6 @@ function renderXML(sections, T) {
   return parts.join('\n\n').trim();
 }
 
-/**
- * OpenAI 风 —— 偏向"分段 + #### 标题"
- */
 function renderOpenAI(sections, T) {
   const parts = [];
   for (const s of sections) {
@@ -233,12 +293,7 @@ function renderOpenAI(sections, T) {
   return parts.join('\n').trim();
 }
 
-/**
- * 推理模型 (o1/R1) 风：保持简洁，不堆砌引导
- * Anthropic & OpenAI 官方都建议：对推理模型不要过度使用 CoT 引导
- */
-function renderThinking(sections, userIntent, taskBody, contextBlock, T) {
-  // 只保留: 角色（可选）+ 目标 + 约束 + 输出格式 + 自检
+function renderThinking(sections, T) {
   const keep = ['role', 'task', 'context', 'constraint', 'format', 'selfcheck'];
   const filtered = sections.filter(s => keep.includes(s.key));
   return filtered.map(s => `${s.title}：\n${s.body}`).join('\n\n').trim();
@@ -257,6 +312,8 @@ const ZH = {
   plan: '执行计划 (Plan-first)',
   selfcheck: '自检与澄清 (Self-Check)',
   security: '安全规则 (Security)',
+
+  userConfirmedHeader: '> 📌 用户通过对话补充的关键信息（请严格遵循）：',
 
   audienceBody: '面向 [目标读者，如：产品同事 / 新手用户 / 技术决策者]，请据此调整语言难度与详略。',
   contextPlaceholder:
@@ -311,7 +368,15 @@ const ZH = {
   changeCoT: '✅ 启用「先列计划再执行」：复杂任务对齐方向，减少返工。',
   changeThinkingNote: 'ℹ️ 检测到目标是推理模型（o1/R1）：已自动省略 CoT 引导，避免干扰其内置推理。',
   changeSelfcheck: '✅ 加入「自检与澄清」：信息不足时先反问，避免 AI"瞎猜"。',
-  changeSecurity: '✅ 添加「指令注入防御」：抵御用户素材中的恶意指令。'
+  changeSecurity: '✅ 添加「指令注入防御」：抵御用户素材中的恶意指令。',
+
+  // 用户通过对话补充的项（替换占位符）
+  changeUserSummary:    '🗣️ 已根据你在对话中补充的信息重写提示词（不再使用占位符猜测）',
+  changeUserTask:       '✅ 已并入你提供的任务信息：{labels}',
+  changeUserContext:    '✅ 已并入你提供的真实材料：{labels}',
+  changeUserAudience:   '✅ 已并入你描述的受众：{labels}',
+  changeUserConstraint: '✅ 已并入你提供的约束：{labels}',
+  changeUserFormat:     '✅ 已并入你指定的输出格式：{labels}'
 };
 
 const EN = {
@@ -325,6 +390,8 @@ const EN = {
   plan: 'Plan-first',
   selfcheck: 'Self-Check & Clarification',
   security: 'Security Rules',
+
+  userConfirmedHeader: '> 📌 Information confirmed by the user (please adhere strictly):',
 
   audienceBody: 'Target audience: [e.g. PM peers / beginners / technical decision-makers]. Adjust depth and tone accordingly.',
   contextPlaceholder:
@@ -379,5 +446,12 @@ Example 2
   changeCoT: '✅ Enabled Plan-first to align direction before generation.',
   changeThinkingNote: 'ℹ️ Reasoning model detected (o1/R1): CoT scaffolding removed to avoid interference.',
   changeSelfcheck: '✅ Added Self-Check & clarification gate to prevent hallucination.',
-  changeSecurity: '✅ Added prompt-injection defense rules.'
+  changeSecurity: '✅ Added prompt-injection defense rules.',
+
+  changeUserSummary:    '🗣️ Rewritten with information you confirmed in the dialog (no more guessed placeholders)',
+  changeUserTask:       '✅ Merged your task info: {labels}',
+  changeUserContext:    '✅ Merged your material: {labels}',
+  changeUserAudience:   '✅ Merged your audience: {labels}',
+  changeUserConstraint: '✅ Merged your constraints: {labels}',
+  changeUserFormat:     '✅ Merged your output format: {labels}'
 };

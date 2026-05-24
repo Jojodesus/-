@@ -2,11 +2,24 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0" />
   <title>AI 提示词优化器 · Prompt Optimizer</title>
   <meta name="description" content="基于 Datawhale、OpenAI、Claude 提示词工程最佳实践的 AI Prompt 优化器：诊断、重写、深度优化你的提示词，让 AI 输出更稳、更准、更高效。" />
+
+  <!-- 主题色（适配 Android 浏览器顶栏 / iOS PWA 状态栏） -->
+  <meta name="theme-color" content="#6366f1" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0b1020" media="(prefers-color-scheme: dark)" />
+
+  <!-- 添加到主屏幕（PWA） -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Prompt 优化器" />
+  <meta name="format-detection" content="telephone=no" />
+
   <link rel="stylesheet" href="./styles.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A8%3C/text%3E%3C/svg%3E" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A8%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
   <header class="topbar">
@@ -18,8 +31,8 @@
       </div>
     </div>
     <div class="topbar-actions">
-      <button id="btn-templates" class="btn btn-ghost" title="场景模板">📚 模板库</button>
-      <button id="btn-settings" class="btn btn-ghost" title="API 设置">⚙️ 设置</button>
+      <button id="btn-templates" class="btn btn-ghost" title="场景模板"><span class="btn-icon">📚</span><span class="btn-label">模板库</span></button>
+      <button id="btn-settings" class="btn btn-ghost" title="API 设置"><span class="btn-icon">⚙️</span><span class="btn-label">设置</span></button>
       <button id="btn-theme" class="btn btn-ghost" title="切换主题">🌙</button>
     </div>
   </header>
@@ -220,10 +233,41 @@
           <button class="chip" data-preset="moonshot">Moonshot</button>
           <button class="chip" data-preset="ollama">Ollama (本地)</button>
         </div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:18px 0 14px"/>
+        <label class="toggle" style="font-size:13px">
+          <input type="checkbox" id="cfg-clarify-enabled" checked />
+          <span>启用「对话引导补全」（缺失关键信息时弹窗追问，而不是用占位符）</span>
+        </label>
       </div>
       <footer>
         <button class="btn btn-ghost" data-close>取消</button>
         <button id="btn-save-settings" class="btn btn-primary">保存</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- 对话引导弹窗 -->
+  <div id="modal-clarify" class="modal hidden">
+    <div class="modal-card modal-wide">
+      <header>
+        <h2>🤔 让我先问你 <span id="clarify-count">几</span> 个关键问题</h2>
+        <button class="btn-close" data-close>✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="hint">
+          检测到你的提示词中可能缺失一些<b>对任务很重要的信息</b>。
+          补全后 AI 输出会精准很多 —— <b>而不是用占位符让你回头自己填</b>。
+        </p>
+        <div id="clarify-questions"></div>
+      </div>
+      <footer>
+        <label class="toggle" style="font-size:12px;margin-right:auto;color:var(--text-soft)">
+          <input type="checkbox" id="clarify-skip-future" />
+          <span>本次会话不再追问</span>
+        </label>
+        <button id="btn-clarify-skip" class="btn btn-ghost">跳过本次（用占位符）</button>
+        <button id="btn-clarify-continue" class="btn btn-primary" disabled>继续优化 →</button>
       </footer>
     </div>
   </div>
