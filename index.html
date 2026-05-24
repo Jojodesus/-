@@ -119,6 +119,78 @@
         </ul>
       </details>
     </section>
+
+    <!-- 第三行：AI 质量评分对比（占满全宽） -->
+    <section class="panel panel-eval full-span">
+      <div class="panel-header">
+        <h2>③ AI 质量评分（原始 vs 优化后）</h2>
+        <div class="panel-actions">
+          <span class="eval-status" id="eval-status"></span>
+          <button id="btn-evaluate" class="btn btn-mini btn-accent">📈 运行 AI 评分</button>
+        </div>
+      </div>
+
+      <p class="hint hint-inline">
+        基于 <b>LLM-as-judge</b> 结构化打分 + <b>OpenAI logprobs</b> 概率加权校准（受 G-Eval 启发）。
+        从 6 个维度对比原始与优化后提示词的质量。需要在「⚙️ 设置」中配置 API（消耗少量 tokens）。
+      </p>
+
+      <!-- 空态 -->
+      <div class="eval-empty" id="eval-empty">
+        <div class="empty-icon">📊</div>
+        <div>点击右上角 <b>📈 运行 AI 评分</b> 开始</div>
+        <div class="empty-sub">将并行评估两个版本，每次约 2-4 个 API 调用</div>
+      </div>
+
+      <!-- 结果区 -->
+      <div class="eval-results hidden" id="eval-results">
+        <!-- 总分卡片 -->
+        <div class="eval-overall">
+          <div class="overall-card" id="orig-card">
+            <div class="card-label">原始</div>
+            <div class="card-score-wrap">
+              <span class="card-score" id="orig-overall">--</span>
+              <span class="card-unit">/9</span>
+            </div>
+            <div class="card-meta" id="orig-meta"></div>
+          </div>
+
+          <div class="card-arrow">→</div>
+
+          <div class="overall-card highlight" id="opt-card">
+            <div class="card-label">优化后</div>
+            <div class="card-score-wrap">
+              <span class="card-score" id="opt-overall">--</span>
+              <span class="card-unit">/9</span>
+            </div>
+            <div class="card-meta" id="opt-meta"></div>
+          </div>
+
+          <div class="overall-card delta-card" id="delta-card">
+            <div class="card-label">提升</div>
+            <div class="card-score-wrap">
+              <span class="card-score" id="delta-value">--</span>
+            </div>
+            <div class="card-meta" id="delta-meta"></div>
+          </div>
+        </div>
+
+        <!-- 维度柱状图 -->
+        <div class="eval-dimensions" id="eval-dimensions"></div>
+
+        <!-- AI 评语 -->
+        <div class="eval-comments">
+          <div class="comment-row">
+            <span class="comment-tag tag-orig">原始评语</span>
+            <span id="orig-comment">--</span>
+          </div>
+          <div class="comment-row">
+            <span class="comment-tag tag-opt">优化后评语</span>
+            <span id="opt-comment">--</span>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- 设置弹窗 -->

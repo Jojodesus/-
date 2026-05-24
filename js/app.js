@@ -6,6 +6,7 @@ import { optimize } from './optimizer.js';
 import { aiOptimize, PROVIDER_PRESETS } from './ai-optimizer.js';
 import { QUICK_TEMPLATES } from './templates.js';
 import { diagnose } from './diagnoser.js';
+import { evaluatePair } from './evaluator.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -45,7 +46,22 @@ const els = {
   cfgModel: $('#cfg-model'),
   cfgTemp:  $('#cfg-temp'),
   templateGrid: $('#template-grid'),
-  toast: $('#toast')
+  toast: $('#toast'),
+
+  // Evaluation
+  btnEvaluate:   $('#btn-evaluate'),
+  evalStatus:    $('#eval-status'),
+  evalEmpty:     $('#eval-empty'),
+  evalResults:   $('#eval-results'),
+  origOverall:   $('#orig-overall'),
+  origMeta:      $('#orig-meta'),
+  optOverall:    $('#opt-overall'),
+  optMeta:       $('#opt-meta'),
+  deltaValue:    $('#delta-value'),
+  deltaMeta:     $('#delta-meta'),
+  evalDimensions:$('#eval-dimensions'),
+  origComment:   $('#orig-comment'),
+  optComment:    $('#opt-comment')
 };
 
 // === 状态 ===
@@ -158,6 +174,9 @@ function bindEvents() {
       onLocalOptimize();
     }
   });
+
+  // 质量评分
+  els.btnEvaluate.addEventListener('click', onEvaluate);
 }
 
 // === 优化操作 ===
@@ -368,4 +387,153 @@ function escape(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   }[c]));
+}
+
+// ============================================================
+// === ③ AI 质量评分 ===========================================
+// ============================================================
+
+async function onEvaluate() {
+  const original = els.input.value.trim();
+  if (!original) {
+    toast('请先输入原始提示词');
+    els.input.focus();
+    return;
+  }
+
+  // 如果还没优化过，先跑一次本地快速优化
+  if (!lastOutput) {
+    const result = optimize(getOptions());
+    renderOutput(result.output);
+    renderDiagnostics(result.diag);
+    renderChanges(result.changes);
+  }
+  const optimized = lastOutput.trim();
+  if (!optimized) {
+    toast('优化后的提示词为空');
+    return;
+  }
+
+  const cfg = loadConfig();
+  if (!cfg.baseUrl || !cfg.apiKey || !cfg.model) {
+    toast('请先在「⚙️ 设置」中填写 API Key 等信息');
+    openModal(els.modalSettings);
+    return;
+  }
+
+  const btn = els.btnEvaluate;
+  btn.disabled = true;
+  btn.classList.add('loading');
+  const orig = btn.textContent;
+  btn.textContent = '🤖 AI 评分中';
+  setEvalStatus('正在调用 AI 评估...', '');
+
+  try {
+    const result = await evaluatePair({
+      original,
+      optimized,
+      config: cfg,
+      onProgress: (msg) => setEvalStatus(msg, '')
+    });
+    renderEvalResults(result);
+    setEvalStatus('✅ 评分完成', 'ok');
+    toast('✅ 质量评分完成');
+  } catch (e) {
+    console.error(e);
+    setEvalStatus('❌ ' + e.message, 'error');
+    toast('评分失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.textContent = orig;
+  }
+}
+
+function setEvalStatus(text, cls) {
+  els.evalStatus.textContent = text;
+  els.evalStatus.className = 'eval-status' + (cls ? ' ' + cls : '');
+}
+
+/**
+ * 渲染评分对比结果
+ */
+function renderEvalResults({ original, optimized, delta, deltaRaw }) {
+  els.evalEmpty.classList.add('hidden');
+  els.evalResults.classList.remove('hidden');
+
+  const origPrimary = original.calibrated ?? original.overall;
+  const optPrimary  = optimized.calibrated ?? optimized.overall;
+
+  // === 总分卡片 ===
+  els.origOverall.textContent = origPrimary.toFixed(1);
+  els.optOverall.textContent  = optPrimary.toFixed(1);
+
+  els.origMeta.innerHTML = buildOverallMeta(original);
+  els.optMeta.innerHTML  = buildOverallMeta(optimized);
+
+  // delta
+  const deltaSign = delta > 0 ? '+' : '';
+  els.deltaValue.textContent = deltaSign + delta.toFixed(1);
+  els.deltaValue.className = 'card-score ' + (
+    delta > 0.1 ? 'delta-positive' : delta < -0.1 ? 'delta-negative' : 'delta-zero'
+  );
+  const pct = origPrimary > 0 ? Math.round((delta / origPrimary) * 100) : null;
+  els.deltaMeta.textContent = pct !== null
+    ? `相对提升 ${pct >= 0 ? '+' : ''}${pct}%`
+    : '';
+
+  // === 维度对比柱状图 ===
+  els.evalDimensions.innerHTML = renderDimensionsHTML(original.dimensions, optimized.dimensions);
+
+  // === 评语 ===
+  els.origComment.textContent = original.comment || '（无）';
+  els.optComment.textContent  = optimized.comment || '（无）';
+}
+
+/**
+ * 总分卡片下方的元信息：JSON 加权 / Logprobs 校准
+ */
+function buildOverallMeta(r) {
+  const parts = [];
+  parts.push(`权重平均 ${r.overall.toFixed(2)}`);
+  if (r.calibrated != null) {
+    const m = r.calibrationMethod === 'logprobs' ? 'Logprobs 校准' : 'argmax';
+    parts.push(`<span title="${escape(m)}">📐 校准 ${r.calibrated.toFixed(2)}</span>`);
+  } else if (r.calibrationError) {
+    parts.push(`<span title="${escape(r.calibrationError)}" style="opacity:.6">⚠️ 未校准</span>`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * 维度并排柱状图
+ */
+function renderDimensionsHTML(origDims, optDims) {
+  const map = new Map(origDims.map(d => [d.key, d]));
+  return optDims.map(opt => {
+    const o = map.get(opt.key) || { score: 0, reason: '' };
+    const oWidth = (o.score / 9) * 100;
+    const optWidth = (opt.score / 9) * 100;
+    const weightPct = Math.round(opt.weight * 100);
+    return `
+      <div class="dim-block">
+        <div class="dim-title">
+          <span>${escape(opt.label)}</span>
+          <span class="dim-weight">权重 ${weightPct}%</span>
+        </div>
+        <div class="dim-row">
+          <span class="dim-tag tag-orig">原始</span>
+          <div class="dim-bar"><div class="dim-bar-fill orig" style="width: ${oWidth.toFixed(1)}%"></div></div>
+          <span class="dim-score">${o.score}</span>
+          <span class="dim-reason" title="${escape(o.reason)}">${escape(o.reason)}</span>
+        </div>
+        <div class="dim-row">
+          <span class="dim-tag tag-opt">优化后</span>
+          <div class="dim-bar"><div class="dim-bar-fill opt" style="width: ${optWidth.toFixed(1)}%"></div></div>
+          <span class="dim-score">${opt.score}</span>
+          <span class="dim-reason" title="${escape(opt.reason)}">${escape(opt.reason)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
 }

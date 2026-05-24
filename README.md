@@ -13,6 +13,7 @@
 | 🧪 **诊断分析** | 自动检测原始提示词是否包含 9 大要素：角色 / 任务 / 上下文 / 约束 / 输出格式 / 受众 / Few-shot / 思维链 / 自检，并打分（0-100） |
 | ⚡ **本地快速优化** | 离线、即时、零成本。基于规则引擎按教程最佳实践重写 |
 | 🤖 **AI 深度优化** | 接入任意 OpenAI 兼容 API（OpenAI / DeepSeek / 通义 / 智谱 / Moonshot / SiliconFlow / Ollama），由大模型扮演资深 Prompt Engineer 重写。**流式输出**、**实时增量呈现** |
+| 📈 **AI 质量评分** | **LLM-as-judge** 6 维结构化打分 + **OpenAI logprobs 概率加权校准**（受 [G-Eval](https://arxiv.org/abs/2303.16634) 启发）。原始 vs 优化后并排对比柱状图 |
 | 🎭 **多种风格** | 通用 Markdown / Claude XML 标签 / OpenAI 段落 / 推理模型简洁风（o1、R1） |
 | 🌍 **多场景模板** | 内置 8 大场景 + 8 个一键载入模板（总结 / 代码 Review / 翻译 / 抽取 / 面试 / 计划先行 / 澄清 / 注入防御） |
 | 🛡 **指令注入防御** | 一键开启 prompt-injection 防御段落，自动用分隔符隔离用户素材 |
@@ -119,9 +120,48 @@ Vercel / Netlify / Cloudflare Pages：直接拖拽文件夹即可。无需 build
 │   ├── optimizer.js    # 规则引擎：结构化重写
 │   ├── diagnoser.js    # 诊断引擎：要素识别 + 评分
 │   ├── ai-optimizer.js # AI 深度优化：OpenAI 兼容 API（流式）
+│   ├── evaluator.js    # AI 质量评分：LLM-as-judge + Logprobs 校准
 │   └── templates.js    # 场景定义 + 一键载入模板
 └── README.md
 ```
+
+---
+
+## 📈 关于 AI 质量评分
+
+### 工作原理
+
+每次"运行 AI 评分"会对 **原始** 和 **优化后** 两个版本各发起 1-2 次 API 调用：
+
+1. **结构化打分（LLM-as-judge）** — 1 次调用 / 每个版本
+   - 让 AI 在 6 个维度上给出 1-9 分 + 简短理由：
+     - **任务清晰度**（权重 20%）：动词明确、范围清楚
+     - **具体可验收**（权重 18%）：约束量化、可检查
+     - **结构与组织**（权重 15%）：分段/标题/列表
+     - **上下文/素材**（权重 12%）：背景充分、与指令分离
+     - **输出格式**（权重 15%）：JSON/Markdown/表格 明确
+     - **鲁棒性与安全**（权重 20%）：自检/澄清/注入防御
+   - 加权平均 → JSON 总分
+
+2. **Logprobs 概率加权校准**（可选，自动尝试）— 1 次调用 / 每个版本
+   - 强制模型只输出一位数字（1-9），开启 `logprobs: true` + `top_logprobs: 10`
+   - 计算概率加权平均：`score = Σ(digit_i × P(digit_i)) / Σ P(digit_i)`
+   - 这种方式比单点 argmax 更平滑、更稳定（受 [G-Eval](https://arxiv.org/abs/2303.16634) 启发）
+   - 如果 API 不支持 logprobs（部分代理或厂商），自动降级到 argmax 或仅显示 JSON 加权分
+
+### 兼容性
+
+| 服务商 | JSON 评分 | Logprobs 校准 |
+| :--- | :---: | :---: |
+| OpenAI                 | ✅ | ✅ |
+| DeepSeek               | ✅ | ✅ |
+| Together / Groq        | ✅ | ✅ |
+| Moonshot / SiliconFlow | ✅ | ⚠️ 视模型 |
+| 通义 / 智谱             | ✅ | ⚠️ 视版本 |
+| Ollama (本地)           | ✅ | ⚠️ 视版本 |
+| Claude (Anthropic 原生) | ✅ via 代理 | ❌（Anthropic 不返回 logprobs） |
+
+> 当 Logprobs 校准失败时，会自动回退到 JSON 加权分，并在卡片下方标注 "⚠️ 未校准"。
 
 ---
 
