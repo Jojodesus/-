@@ -6,6 +6,28 @@
 
 ---
 
+## 🌐 在线体验（电脑 / 手机均可）
+
+合并代码后，启用 GitHub Pages 即可获得一个手机可直接打开的公开 URL：
+
+> **`https://jojodesus.github.io/-/`**
+
+📱 **手机使用方式**：
+1. 用手机浏览器打开上面的 URL
+2. 在 Safari / Chrome 菜单中选择「**添加到主屏幕**」
+3. 之后就像 App 一样从主屏幕一键打开（已配 PWA / 主题色 / 安全区适配）
+
+### 🚀 一键部署到自己的账号
+
+| 平台 | 一键部署 |
+| :--- | :--- |
+| **GitHub Pages** | 推送 → 仓库 Settings → Pages → Source 选 `GitHub Actions` 即可（已带 `.github/workflows/deploy.yml`） |
+| **Vercel**       | [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Jojodesus/-) |
+| **Netlify**      | [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/Jojodesus/-) |
+| **Cloudflare Pages** | Connect GitHub → Build command 留空 → Output dir `/` |
+
+---
+
 ## ✨ 核心特性
 
 | 能力 | 说明 |
